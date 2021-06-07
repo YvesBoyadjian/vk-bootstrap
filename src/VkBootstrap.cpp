@@ -142,6 +142,7 @@ class VulkanFunctions {
 	PFN_vkGetPhysicalDeviceFormatProperties2 fp_vkGetPhysicalDeviceFormatProperties2 = nullptr;
 	PFN_vkGetPhysicalDeviceMemoryProperties2 fp_vkGetPhysicalDeviceMemoryProperties2 = nullptr;
 
+	PFN_vkGetDeviceProcAddr fp_vkGetDeviceProcAddr = nullptr;
 	PFN_vkCreateDevice fp_vkCreateDevice = nullptr;
 	PFN_vkDestroyDevice fp_vkDestroyDevice = nullptr;
 	PFN_vkEnumerateDeviceExtensionProperties fp_vkEnumerateDeviceExtensionProperties = nullptr;
@@ -167,13 +168,10 @@ class VulkanFunctions {
 	}
 
 	template <typename T> void get_inst_proc_addr(T& out_ptr, const char* func_name) {
-		std::lock_guard<std::mutex> lg(init_mutex);
 		get_proc_addr(out_ptr, func_name);
 	}
 
 	void init_instance_funcs(VkInstance inst) {
-		std::lock_guard<std::mutex> lg(init_mutex);
-
 		instance = inst;
 		get_proc_addr(fp_vkDestroyInstance, "vkDestroyInstance");
 		get_proc_addr(fp_vkEnumeratePhysicalDevices, "vkEnumeratePhysicalDevices");
@@ -189,6 +187,7 @@ class VulkanFunctions {
 		get_proc_addr(fp_vkGetPhysicalDeviceFormatProperties2, "vkGetPhysicalDeviceFormatProperties2");
 		get_proc_addr(fp_vkGetPhysicalDeviceMemoryProperties2, "vkGetPhysicalDeviceMemoryProperties2");
 
+		get_proc_addr(fp_vkGetDeviceProcAddr, "vkGetDeviceProcAddr");
 		get_proc_addr(fp_vkCreateDevice, "vkCreateDevice");
 		get_proc_addr(fp_vkDestroyDevice, "vkDestroyDevice");
 		get_proc_addr(fp_vkEnumerateDeviceExtensionProperties, "vkEnumerateDeviceExtensionProperties");
@@ -556,7 +555,16 @@ bool SystemInfo::is_layer_available(const char* layer_name) const {
 	if (!layer_name) return false;
 	return detail::check_layer_supported(available_layers, layer_name);
 }
-
+void destroy_surface(Instance instance, VkSurfaceKHR surface) {
+	if (instance.instance != VK_NULL_HANDLE && surface != VK_NULL_HANDLE) {
+		detail::vulkan_functions().fp_vkDestroySurfaceKHR(instance.instance, surface, instance.allocation_callbacks);
+	}
+}
+void destroy_surface(VkInstance instance, VkSurfaceKHR surface, VkAllocationCallbacks* callbacks) {
+	if (instance != VK_NULL_HANDLE && surface != VK_NULL_HANDLE) {
+		detail::vulkan_functions().fp_vkDestroySurfaceKHR(instance, surface, callbacks);
+	}
+}
 void destroy_instance(Instance instance) {
 	if (instance.instance != VK_NULL_HANDLE) {
 		if (instance.debug_messenger != VK_NULL_HANDLE)
@@ -572,7 +580,7 @@ InstanceBuilder::InstanceBuilder() {}
 
 detail::Result<Instance> InstanceBuilder::build() const {
 
-	auto sys_info_ret = SystemInfo::get_system_info();
+	auto sys_info_ret = SystemInfo::get_system_info(info.fp_vkGetInstanceProcAddr);
 	if (!sys_info_ret) return sys_info_ret.error();
 	auto system = sys_info_ret.value();
 
@@ -738,6 +746,7 @@ detail::Result<Instance> InstanceBuilder::build() const {
 	instance.allocation_callbacks = info.allocation_callbacks;
 	instance.instance_version = api_version;
 	instance.fp_vkGetInstanceProcAddr = detail::vulkan_functions().ptr_vkGetInstanceProcAddr;
+	instance.fp_vkGetDeviceProcAddr = detail::vulkan_functions().fp_vkGetDeviceProcAddr;
 	return instance;
 }
 
@@ -942,7 +951,8 @@ uint32_t get_separate_queue_index(std::vector<VkQueueFamilyProperties> const& fa
     VkQueueFlags undesired_flags) {
 	uint32_t index = QUEUE_INDEX_MAX_VALUE;
 	for (uint32_t i = 0; i < static_cast<uint32_t>(families.size()); i++) {
-		if ((families[i].queueFlags & desired_flags) && ((families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) == 0)) {
+		if ((families[i].queueFlags & desired_flags) &&
+		    ((families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) == 0)) {
 			if ((families[i].queueFlags & undesired_flags) == 0) {
 				return i;
 			} else {
@@ -1371,6 +1381,10 @@ detail::Result<VkQueue> Device::get_dedicated_queue(QueueType type) const {
 	return detail::get_queue(device, index.value());
 }
 
+// ---- Dispatch ---- //
+
+DispatchTable Device::make_table() const { return { device, fp_vkGetDeviceProcAddr }; }
+
 // ---- Device ---- //
 
 CustomQueueDescription::CustomQueueDescription(uint32_t index, uint32_t count, std::vector<float> priorities)
@@ -1474,6 +1488,7 @@ detail::Result<Device> DeviceBuilder::build() const {
 	device.surface = physical_device.surface;
 	device.queue_families = physical_device.queue_families;
 	device.allocation_callbacks = info.allocation_callbacks;
+	device.fp_vkGetDeviceProcAddr = detail::vulkan_functions().fp_vkGetDeviceProcAddr;
 	return device;
 }
 DeviceBuilder& DeviceBuilder::custom_queue_setup(std::vector<CustomQueueDescription> queue_descriptions) {
