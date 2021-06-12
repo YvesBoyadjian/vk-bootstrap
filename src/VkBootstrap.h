@@ -219,6 +219,7 @@ struct Instance {
 
 	private:
 	bool headless = false;
+	bool supports_properties2_ext = false;
 	uint32_t instance_version = VK_MAKE_VERSION(1, 0, 0);
 
 	friend class InstanceBuilder;
@@ -475,6 +476,7 @@ class PhysicalDeviceSelector {
 		VkSurfaceKHR surface = VK_NULL_HANDLE;
 		uint32_t version = VK_MAKE_VERSION(1, 0, 0);
 		bool headless = false;
+		bool supports_properties2_ext = false;
 	} instance_info;
 
 	struct PhysicalDeviceDesc {
@@ -484,17 +486,20 @@ class PhysicalDeviceSelector {
 		VkPhysicalDeviceFeatures device_features{};
 		VkPhysicalDeviceProperties device_properties{};
 		VkPhysicalDeviceMemoryProperties mem_properties{};
+
+// Because the KHR version is a typedef in Vulkan 1.1, it is safe to define one or the other.
 #if defined(VK_API_VERSION_1_1)
 		VkPhysicalDeviceFeatures2 device_features2{};
-		std::vector<detail::GenericFeaturesPNextNode> extended_features_chain;
+#else
+		VkPhysicalDeviceFeatures2KHR device_features2{};
 #endif
+		std::vector<detail::GenericFeaturesPNextNode> extended_features_chain;
 	};
 
 	// We copy the extension features stored in the selector criteria under the prose of a
 	// "template" to ensure that after fetching everything is compared 1:1 during a match.
 
-	PhysicalDeviceDesc populate_device_details(uint32_t instance_version,
-	    VkPhysicalDevice phys_device,
+	PhysicalDeviceDesc populate_device_details(VkPhysicalDevice phys_device,
 	    std::vector<detail::GenericFeaturesPNextNode> const& src_extended_features_chain) const;
 
 	struct SelectionCriteria {
@@ -556,6 +561,14 @@ struct Device {
 
 	// Return a loaded dispatch table
 	DispatchTable make_table() const;
+
+	private:
+	struct {
+		PFN_vkGetDeviceQueue fp_vkGetDeviceQueue = nullptr;
+		PFN_vkDestroyDevice fp_vkDestroyDevice = nullptr;
+	} internal_table;
+	friend class DeviceBuilder;
+	friend void destroy_device(Device device);
 };
 
 // For advanced device queue setup
@@ -615,6 +628,16 @@ struct Swapchain {
 	// VkImageViews must be destroyed.
 	detail::Result<std::vector<VkImageView>> get_image_views();
 	void destroy_image_views(std::vector<VkImageView> const& image_views);
+
+	private:
+	struct {
+		PFN_vkGetSwapchainImagesKHR fp_vkGetSwapchainImagesKHR = nullptr;
+		PFN_vkCreateImageView fp_vkCreateImageView = nullptr;
+		PFN_vkDestroyImageView fp_vkDestroyImageView = nullptr;
+		PFN_vkDestroySwapchainKHR fp_vkDestroySwapchainKHR = nullptr;
+	} internal_table;
+	friend class SwapchainBuilder;
+	friend void destroy_swapchain(Swapchain const& swapchain);
 };
 
 void destroy_swapchain(Swapchain const& swapchain);
