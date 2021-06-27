@@ -17,6 +17,7 @@
 #pragma once
 
 #include <cassert>
+#include <cstdio>
 
 #include <vector>
 #include <system_error>
@@ -120,9 +121,12 @@ struct GenericFeaturesPNextNode {
 
 	GenericFeaturesPNextNode();
 
-	template <typename T> void set(T const& features) { *reinterpret_cast<T*>(this) = features; }
+	template <typename T>
+	GenericFeaturesPNextNode(T const& features) noexcept {
+		*reinterpret_cast<T*>(this) = features;
+	}
 
-	static bool match(GenericFeaturesPNextNode const& requested, GenericFeaturesPNextNode const& supported);
+	static bool match(GenericFeaturesPNextNode const& requested, GenericFeaturesPNextNode const& supported) noexcept;
 
 	VkStructureType sType = static_cast<VkStructureType>(0);
 	void* pNext = nullptr;
@@ -206,6 +210,22 @@ struct SystemInfo {
 	bool debug_utils_available = false;
 };
 
+// Forward declared - check VkBoostrap.cpp for implementations
+const char* to_string_message_severity(VkDebugUtilsMessageSeverityFlagBitsEXT s);
+const char* to_string_message_type(VkDebugUtilsMessageTypeFlagsEXT s);
+
+// Default debug messenger
+// Feel free to copy-paste it into your own code, change it as needed, then call `set_debug_callback()` to use that instead
+inline VKAPI_ATTR VkBool32 VKAPI_CALL default_debug_callback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+    VkDebugUtilsMessageTypeFlagsEXT messageType,
+    const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
+    void*) {
+	auto ms = to_string_message_severity(messageSeverity);
+	auto mt = to_string_message_type(messageType);
+	printf("[%s: %s]\n%s\n", ms, mt, pCallbackData->pMessage);
+
+	return VK_FALSE; // Applications must return false here
+}
 
 class InstanceBuilder;
 class PhysicalDeviceSelector;
@@ -270,6 +290,8 @@ class InstanceBuilder {
 	InstanceBuilder& use_default_debug_messenger();
 	// Provide a user defined debug callback.
 	InstanceBuilder& set_debug_callback(PFN_vkDebugUtilsMessengerCallbackEXT callback);
+	// Sets the void* to use in the debug messenger - only useful with a custom callback
+	InstanceBuilder& set_debug_callback_user_data_pointer(void* user_data_pointer);
 	// Set what message severity is needed to trigger the callback.
 	InstanceBuilder& set_debug_messenger_severity(VkDebugUtilsMessageSeverityFlagsEXT severity);
 	// Add a message severity to the list that triggers the callback.
@@ -310,13 +332,14 @@ class InstanceBuilder {
 		VkInstanceCreateFlags flags = 0;
 		std::vector<VkBaseOutStructure*> pNext_elements;
 
-		// debug callback
-		PFN_vkDebugUtilsMessengerCallbackEXT debug_callback = nullptr;
+		// debug callback - use the default so it is not nullptr
+		PFN_vkDebugUtilsMessengerCallbackEXT debug_callback = default_debug_callback;
 		VkDebugUtilsMessageSeverityFlagsEXT debug_message_severity =
 		    VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
 		VkDebugUtilsMessageTypeFlagsEXT debug_message_type =
 		    VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
 		    VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+		void* debug_user_data_pointer = nullptr;
 
 		// validation features
 		std::vector<VkValidationCheckEXT> disabled_validation_checks;
@@ -439,15 +462,7 @@ class PhysicalDeviceSelector {
 #if defined(VK_API_VERSION_1_1)
 	template <typename T>
 	PhysicalDeviceSelector& add_required_extension_features(T const& features) {
-		assert(features.sType != 0 && "Features struct sType must be filled with the struct's "
-		                              "corresponding VkStructureType enum");
-		assert(
-		    features.sType != VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 &&
-		    "Do not pass VkPhysicalDeviceFeatures2 as a required extension feature structure. An "
-		    "instance of this is managed internally for selection criteria and device creation.");
-		detail::GenericFeaturesPNextNode node;
-		node.set(features);
-		criteria.extended_features_chain.push_back(node);
+		criteria.extended_features_chain.push_back(features);
 		return *this;
 	}
 #endif

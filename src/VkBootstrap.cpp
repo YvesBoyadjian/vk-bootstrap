@@ -16,7 +16,6 @@
 
 #include "VkBootstrap.h"
 
-#include <cstdio>
 #include <cstring>
 
 #if defined(_WIN32)
@@ -41,7 +40,7 @@ GenericFeaturesPNextNode::GenericFeaturesPNextNode()
 : fields() {} // zero initializes the array of fields
 
 bool GenericFeaturesPNextNode::match(
-    GenericFeaturesPNextNode const& requested, GenericFeaturesPNextNode const& supported) {
+    GenericFeaturesPNextNode const& requested, GenericFeaturesPNextNode const& supported) noexcept {
 	assert(requested.sType == supported.sType && "Non-matching sTypes in features nodes!");
 	for (uint32_t i = 0; i < field_capacity; i++) {
 		if (requested.fields[i] && !supported.fields[i]) return false;
@@ -257,6 +256,7 @@ VkResult create_debug_utils_messenger(VkInstance instance,
     PFN_vkDebugUtilsMessengerCallbackEXT debug_callback,
     VkDebugUtilsMessageSeverityFlagsEXT severity,
     VkDebugUtilsMessageTypeFlagsEXT type,
+    void* user_data_pointer,
     VkDebugUtilsMessengerEXT* pDebugMessenger,
     VkAllocationCallbacks* allocation_callbacks) {
 
@@ -267,6 +267,7 @@ VkResult create_debug_utils_messenger(VkInstance instance,
 	messengerCreateInfo.messageSeverity = severity;
 	messengerCreateInfo.messageType = type;
 	messengerCreateInfo.pfnUserCallback = debug_callback;
+	messengerCreateInfo.pUserData = user_data_pointer;
 
 	PFN_vkCreateDebugUtilsMessengerEXT createMessengerFunc;
 	detail::vulkan_functions().get_inst_proc_addr(createMessengerFunc, "vkCreateDebugUtilsMessengerEXT");
@@ -287,17 +288,6 @@ void destroy_debug_utils_messenger(
 	if (deleteMessengerFunc != nullptr) {
 		deleteMessengerFunc(instance, debugMessenger, allocation_callbacks);
 	}
-}
-
-VKAPI_ATTR VkBool32 VKAPI_CALL default_debug_callback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
-    VkDebugUtilsMessageTypeFlagsEXT messageType,
-    const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
-    void*) {
-	auto ms = to_string_message_severity(messageSeverity);
-	auto mt = to_string_message_type(messageType);
-	printf("[%s: %s]\n%s\n", ms, mt, pCallbackData->pMessage);
-
-	return VK_FALSE;
 }
 
 namespace detail {
@@ -674,6 +664,7 @@ detail::Result<Instance> InstanceBuilder::build() const {
 		messengerCreateInfo.messageSeverity = info.debug_message_severity;
 		messengerCreateInfo.messageType = info.debug_message_type;
 		messengerCreateInfo.pfnUserCallback = info.debug_callback;
+		messengerCreateInfo.pUserData = info.debug_user_data_pointer;
 		pNext_chain.push_back(reinterpret_cast<VkBaseOutStructure*>(&messengerCreateInfo));
 	}
 
@@ -725,6 +716,7 @@ detail::Result<Instance> InstanceBuilder::build() const {
 		    info.debug_callback,
 		    info.debug_message_severity,
 		    info.debug_message_type,
+		    info.debug_user_data_pointer,
 		    &instance.debug_messenger,
 		    info.allocation_callbacks);
 		if (res != VK_SUCCESS) {
@@ -793,6 +785,10 @@ InstanceBuilder& InstanceBuilder::use_default_debug_messenger() {
 InstanceBuilder& InstanceBuilder::set_debug_callback(PFN_vkDebugUtilsMessengerCallbackEXT callback) {
 	info.use_debug_messenger = true;
 	info.debug_callback = callback;
+	return *this;
+}
+InstanceBuilder& InstanceBuilder::set_debug_callback_user_data_pointer(void* user_data_pointer) {
+	info.debug_user_data_pointer = user_data_pointer;
 	return *this;
 }
 InstanceBuilder& InstanceBuilder::set_headless(bool headless) {
@@ -1141,6 +1137,19 @@ PhysicalDeviceSelector::PhysicalDeviceSelector(Instance const& instance) {
 }
 
 detail::Result<PhysicalDevice> PhysicalDeviceSelector::select() const {
+
+#if !defined(NDEBUG)
+	// Validation
+	for(const auto& node : criteria.extended_features_chain) {
+		assert(node.sType != 0 && "Features struct sType must be filled with the struct's "
+									  "corresponding VkStructureType enum");
+		assert(
+			node.sType != VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 &&
+			"Do not pass VkPhysicalDeviceFeatures2 as a required extension feature structure. An "
+			"instance of this is managed internally for selection criteria and device creation.");
+	}
+#endif
+
 	if (!instance_info.headless && !criteria.defer_surface_initialization) {
 		if (instance_info.surface == VK_NULL_HANDLE)
 			return detail::Result<PhysicalDevice>{ PhysicalDeviceError::no_surface_provided };
